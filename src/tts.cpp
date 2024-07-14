@@ -1,5 +1,4 @@
 #include <iostream>
-#include <fstream>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
@@ -126,9 +125,11 @@ class session {
             return 0;
         }
 
-        int request(const string& voice, const string& text, const string& outfile) {
+        int request(const string& voice, 
+                    const string& text, 
+                    vector<tuple<int, int, string>>& vm, 
+                    vector<string>& v) {
             try {
-                ofstream o(outfile, ios::binary);
                 ws_.write(net::buffer(ssml_str(voice, text)));
 
                 beast::flat_buffer buffer;
@@ -139,16 +140,25 @@ class session {
                         map<string, string> headers;
                         parse_headers(data.substr(0, data.find("\r\n\r\n")), headers);
                         if (headers["Path"] == "turn.end") break;
+                        if (headers["Path"] == "audio.metadata") {
+                            string body = data.substr(data.find("\r\n\r\n") + strlen("\r\n\r\n"));
+                            json meta = json::parse(body.c_str());
+                            for (auto metadata: meta["Metadata"]) {
+                                if (metadata["Type"] != "WordBoundary") continue;
+                                vm.push_back(make_tuple(metadata["Data"]["Offset"].get<int>(), 
+                                                        metadata["Data"]["Duration"].get<int>(), 
+                                                        metadata["Data"]["text"]["Text"].get<string>()));
+                            }
+                        }
                     } else if (ws_.got_binary()) {
                         string data = beast::buffers_to_string(buffer.data());
                         unsigned short headers_length = endian::endian_reverse(*((unsigned short *)data.c_str()));
-                        o << data.substr(sizeof(unsigned short) + headers_length);
+                        v.push_back(data.substr(sizeof(unsigned short) + headers_length));
                     } else {
                         break;
                     }
                     buffer.consume(bytes);
                 }
-                o.close();
             } catch (exception const& e) {
                 cout << "request exception error: " << e.what() << endl;
                 return -1;
@@ -231,8 +241,11 @@ int tts_open(const string& rate, const string pitch, const string& volume) {
     return 0;
 }
 
-int tts_request(const string& voice, const string& text, const string& outfile) {
-    if (cli.request(voice, text, outfile) < 0) return -1;
+int tts_request(const string& voice, 
+                const string& text, 
+                vector<tuple<int, int, string>>& meta, 
+                vector<string>& data) {
+    if (cli.request(voice, text, meta, data) < 0) return -1;
     return 0;
 }
 
