@@ -1,6 +1,11 @@
 #include <iostream>
+#include <fstream>
+#include <vector>
+#include <tuple>
+#include <chrono>
 #include <boost/program_options.hpp>
 
+#include "fmt/format.h"
 #include "../include/tts.h"
 
 namespace po = boost::program_options;
@@ -10,6 +15,32 @@ void usage(const char * name, po::options_description& opts) {
          << " [-h] [-l] [-t TEXT] [-v VOICE] [--rate RATE] [--volume VOLUME] [--pitch PITCH]" 
          << " [-o OUTFILE] [--proxy PROXY]" << endl << endl << "Microsoft Edge TTS" << endl << endl 
          << "optional arguments:" << endl << opts << endl;
+}
+
+
+string mktimestamp(int t) {
+    int hours = (t / 10000000) / 3600;
+    int minutes = ((t / 10000000) % 3600) / 60;
+    int seconds = ((t / 10000000) % 3600) % 60;
+    int millions = (t % 10000000) / 10000;
+
+    return fmt::format("{:02d}:{:02d}:{:02d}.{:03d}", 
+                       hours, minutes, seconds, millions);
+}
+
+void echo_subtitle(const vector<tuple<int, int, string>>& v, int& start) {
+    cout << mktimestamp(start) << " --> ";
+
+    int end = get<0>(*(v.end() - 1));
+    cout << mktimestamp(end) << endl;
+    start = end;
+
+    for (auto item: v) {
+        string text;
+        tie(ignore, ignore, text) = item;
+        cout << text << " ";
+    }
+    cout << endl << endl;
 }
 
 int main(int argc, char * argv[]) {
@@ -23,7 +54,7 @@ int main(int argc, char * argv[]) {
         ("volume", po::value<string>()->value_name("VOLUME")->default_value("+0%"), "set TTS volume. Default +0%.")
         ("pitch,r", po::value<string>()->value_name("PITCH")->default_value("+0Hz"), "set TTS pitch. Default +0Hz.")
         ("outfile,o", po::value<string>()->value_name("OUTFILE")->default_value("output.mp3"), "set TTS output mp3 file. Default output.mp3.")
-        ("proxy", po::value<string>()->value_name("PROXY"), "use a proxy for TTS and voice list.")
+        ("webvtt,w", "show subtitles")
         ;
     try {
         po::variables_map vm;
@@ -54,7 +85,38 @@ int main(int argc, char * argv[]) {
                 return -1;
             }
 
-            tts_request(voice, text, outfile);
+            vector<tuple<int, int, string>> meta;
+            vector<string> data;
+
+            tts_request(voice, text, meta, data);
+
+            ofstream o(outfile);
+            for (string item: data) {
+                o << item;
+            }
+            o.close();
+
+            if (vm.count("webvtt") > 0) {
+                cout << endl << endl;
+
+                cout << "WEBVTT" << endl << endl;
+                int words = 10;
+                int lines = meta.size() / words;
+                int start = get<0>(meta[0]);
+                for (int i=0; i<=lines; i++) {
+                    if ((i * words) >= meta.size()) break;
+
+                    vector<tuple<int, int, string>> v;
+                    if (i == lines) {
+                        v.assign(meta.begin() + i * words, meta.end());
+                    } else {
+                        v.assign(meta.begin() + i * words, meta.begin() + (i + 1) * words);
+                    }
+                    echo_subtitle(v, start);
+                }
+
+                cout << endl << endl;
+            }
 
             tts_close();
 
